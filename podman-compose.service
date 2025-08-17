@@ -1,0 +1,16 @@
+[Unit]
+Description=Podman Compose
+After=network-online.target var-mnt.mount
+Wants=network-online.target var-mnt.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/var/mnt/grafana-compose
+ExecStart=/usr/bin/bash -c '/usr/bin/podman compose -f podman-compose.yaml up -d || true'
+ExecStop=/usr/bin/podman compose -f podman-compose.yaml down
+TimeoutStartSec=0
+User=core
+
+[Install]
+WantedBy=multi-user.target

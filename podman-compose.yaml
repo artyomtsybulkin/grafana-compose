@@ -1,0 +1,156 @@
+# grafana, loki, syslog-ng, and haproxy podman-compose configuration
+
+networks:
+  public_net:  { external: true }
+  private_net: { external: true }
+
+
+volumes:
+  grafana_vol: { name: grafana_vol }
+  loki_vol:    { name: loki_vol }
+  syslog_vol:  { name: syslog_vol }
+
+
+services:
+
+  haproxy:
+    image: docker.io/library/haproxy:lts
+    container_name: haproxy
+    # Uptime
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "pidof haproxy || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+    # Security
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 100
+    cap_drop: [ ALL ]
+    cap_add: [ NET_BIND_SERVICE ]
+    tmpfs: [ /tmp ]
+    logging: { driver: journald }
+    security_opt: [ no-new-privileges:true ]
+    # Network
+    networks: [ private_net, public_net ]
+    ports: [ "3000:3000", "3100:3100" ]
+    # Storage
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:Z
+
+  grafana:
+    image: docker.io/grafana/grafana:latest
+    container_name: grafana
+    # Uptime
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+    # Security
+    user: "472:0"
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 100
+    cap_drop: [ ALL ]
+    cap_add: [ NET_BIND_SERVICE ]
+    tmpfs: [ /tmp ]
+    logging: { driver: journald }
+    security_opt: [ no-new-privileges:true ]
+    # Network
+    networks: [ private_net ]
+    expose: [ "3000" ]
+    # Storage
+    volumes:
+      - grafana_vol:/var/lib/grafana:Z
+    # Variables
+    environment:
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_FEATURE_TOGGLES_ENABLE=alertingSimplifiedRouting,alertingQueryAndExpressionsStepMode
+    entrypoint:
+      - sh
+      - -euc
+      - |
+        mkdir -p /etc/grafana/provisioning/datasources
+        cat <<EOF > /etc/grafana/provisioning/datasources/ds.yaml
+        apiVersion: 1
+        datasources:
+        - name: Loki
+          type: loki
+          access: proxy
+          orgId: 1
+          url: http://loki:3100
+          basicAuth: false
+          isDefault: true
+          version: 1
+          editable: true
+        EOF
+        /run.sh
+    
+  loki:
+    image: docker.io/grafana/loki:latest
+    container_name: loki
+    # Uptime
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "pidof loki || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+    # Security
+    user: "10001:10001"
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 100
+    cap_drop: [ ALL ]
+    cap_add: [ NET_BIND_SERVICE ]
+    tmpfs: [ /tmp ]
+    logging: { driver: journald }
+    security_opt: [ no-new-privileges:true ]
+    # Network
+    networks: [ private_net ]
+    expose: [ "3100", "9096" ]
+    # Storage
+    volumes:
+      - ./loki-config.yaml:/mnt/config/loki-config.yaml:Z
+      - loki_vol:/tmp/loki:Z
+    command: -config.file=/mnt/config/loki-config.yaml
+  
+  syslog-ng:
+    image: docker.io/balabit/syslog-ng:latest
+    container_name: syslog-ng
+    depends_on: [ loki ]
+    # Uptime
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "pidof syslog-ng || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+    # Security
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 100
+    cap_drop: [ ALL ]
+    cap_add: [ NET_BIND_SERVICE ]
+    tmpfs: [ /tmp ]
+    logging: { driver: journald }
+    security_opt: [ no-new-privileges:true ]
+    # Network
+    networks: [ private_net ]
+    ports: ["0.0.0.0:514:514/udp", "0.0.0.0:514:514/tcp"]
+    # Storage
+    volumes:
+      - ./syslog-ng.conf:/etc/syslog-ng/syslog-ng.conf:Z
+      - syslog_vol:/var/log:Z
+    # Variables
+    environment:
+      { PUID: 1000, PGID: 1000, TZ: "${TZ}" }
